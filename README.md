@@ -128,6 +128,7 @@ The framework provides a wide array of simulators for core WordPress functionali
 - **`Scheduler`**: Mocks `wp_schedule_event` and other cron functions.
 - **`User`**: Simulates user authentication and capabilities.
 - **`WPDB`**: An in-memory SQLite-based simulator for `$wpdb`.
+- **`Data`**: A utility for generating fake data for your tests, powered by the popular Faker library. Ideal for creating realistic posts, users, and other data types.
 
 -----
 
@@ -149,3 +150,207 @@ The WP2 Test framework is open-source software licensed under the **MIT License*
 - **Sebastian Bergmann** (for PHPUnit)
 - **Pádraic Brady** (for Mockery)
 - **Giuseppe Mazzapica** (for Brain Monkey)
+
+-----
+
+## Detailed Usage
+
+### Generating Test Data
+
+For more complex data needs, you can use the `Data` generator, which provides access to [Faker](https://github.com/FakerPHP/Faker) for creating realistic test data.
+
+```php
+<?php
+
+use WP2_Test\Unit\Scenario;
+use WP2_Test\Core\Generators\Data;
+
+class MyDataTest extends Scenario
+{
+    public function test_with_generated_data()
+    {
+        $data_generator = new Data();
+        $posts = $data_generator->create_posts(5);
+
+        // Your test logic here
+        $this->assertCount(5, $posts);
+        $this->assertIsString($posts[0]['post_title']);
+    }
+}
+```
+
+### Simulator Examples
+
+While unit tests should be isolated, you often need to test interactions with WordPress systems. The simulators provide a lightweight way to do this.
+
+**Using the WPDB Simulator**
+
+The `$wpdb` simulator runs on an in-memory SQLite database, allowing you to test database interactions without a real database connection. To use it, instantiate it in your test's `set_up` method and assign it to the global `$wpdb` variable.
+
+```php
+<?php
+use WP2_Test\Unit\Scenario;
+use WP2_Test\Simulators\WPDB;
+
+class MyDbServiceTest extends Scenario
+{
+    protected function set_up(): void
+    {
+        parent::set_up();
+        global $wpdb;
+        $wpdb = new WPDB(); // Replace global $wpdb with our simulator
+    }
+
+    public function test_it_inserts_a_user()
+    {
+        global $wpdb;
+        $result = $wpdb->insert('users', [
+            'user_login' => 'test',
+            'user_email' => 'test@example.com'
+        ]);
+        $this->assertTrue($result);
+
+        $count = $wpdb->get_var("SELECT COUNT(*) FROM users WHERE user_login = 'test'");
+        $this->assertEquals(1, $count);
+    }
+}
+```
+Testing Emails with the Mail Simulator
+
+The Mail simulator intercepts calls to wp_mail() and stores emails in a "sentbox" for inspection.
+
+```php
+<?php
+use WP2_Test\Unit\Scenario;
+use WP2_Test\Simulators\Mail;
+
+class MyNotificationTest extends Scenario
+{
+    protected function set_up(): void
+    {
+        parent::set_up();
+        Mail::intercept(); // Start capturing emails
+    }
+
+    protected function tear_down(): void
+    {
+        Mail::tear_down(); // Clear sentbox
+        parent::tear_down();
+    }
+
+    public function test_sends_welcome_email()
+    {
+        // Code that calls wp_mail('new@example.com', 'Welcome!', ...);
+        send_welcome_email('new@example.com');
+
+        Mail::assert_sent(1);
+        Mail::assert_sent_to('new@example.com');
+        Mail::assert_body_contains('Welcome');
+    }
+}
+```
+Testing Cron Events with the Scheduler Simulator
+
+The Scheduler simulator intercepts calls to wp_schedule_event() and lets you assert that cron jobs were correctly scheduled.
+
+```php
+<?php
+use WP2_Test\Unit\Scenario;
+use WP2_Test\Simulators\Scheduler;
+
+class MyCronTest extends Scenario
+{
+    protected function set_up(): void
+    {
+        parent::set_up();
+        Scheduler::boot();
+    }
+
+    protected function tear_down(): void
+    {
+        Scheduler::tear_down();
+        parent::tear_down();
+    }
+
+    public function test_schedules_daily_cleanup()
+    {
+        // Code that calls wp_schedule_event(..., 'my_cleanup_hook');
+        schedule_my_tasks();
+
+        Scheduler::assert_scheduled('my_cleanup_hook');
+    }
+}
+```
+**Simulating Users and Permissions**
+
+The `User` simulator can mock the current user and their capabilities, which is essential for testing access control logic.
+
+```php
+<?php
+use WP2_Test\Unit\Scenario;
+use WP2_Test\Simulators\User;
+
+class MyPermissionTest extends Scenario
+{
+    protected function tear_down(): void
+    {
+        User::reset(); // Clear user simulation
+        parent::tear_down();
+    }
+
+    public function test_admin_can_access()
+    {
+        // Simulate an administrator
+        $admin_user = (object) ['ID' => 1];
+        User::set_current_user($admin_user);
+        User::set_capability('manage_options', true);
+
+        // Your code that calls current_user_can('manage_options')
+        $this->assertTrue(current_user_can('manage_options'));
+    }
+
+    public function test_subscriber_cannot_access()
+    {
+        // Simulate a subscriber
+        $subscriber = (object) ['ID' => 2];
+        User::set_current_user($subscriber);
+        User::set_capability('manage_options', false);
+
+        $this->assertFalse(current_user_can('manage_options'));
+    }
+}
+```
+Using the Virtual Filesystem
+
+The FS simulator, which uses vfsStream, allows you to test code that interacts with the filesystem without touching the actual disk.
+
+```php
+<?php
+use WP2_Test\Unit\Scenario;
+use WP2_Test\Simulators\FS;
+
+class MyFileProcessorTest extends Scenario
+{
+    protected function set_up(): void
+    {
+        parent::set_up();
+        FS::boot(); // Initialize the virtual filesystem
+    }
+
+    public function test_reads_config_from_file()
+    {
+        // Create a virtual file
+        $config_path = '/configs/my-plugin.json';
+        $json_content = '{"setting":"enabled"}';
+        FS::create_file($config_path, $json_content);
+
+        // Get the virtual path for the test
+        $virtual_path = FS::get_vfs_path($config_path);
+
+        // Code that calls file_get_contents($virtual_path)
+        $config = json_decode(file_get_contents($virtual_path), true);
+
+        $this->assertEquals('enabled', $config['setting']);
+    }
+}
+```
